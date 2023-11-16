@@ -139,7 +139,7 @@ func main() {
 	}
 	//log.Printf("continuButton: %#v", continueButton)
 	continueButton.Click()
-	logger.Debug("Continue buttong clicked")
+	logger.Debug("Continue button clicked")
 
 	// Bring it back to the front
 	page.BringToFront()
