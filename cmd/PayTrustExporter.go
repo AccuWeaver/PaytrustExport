@@ -131,7 +131,7 @@ func main() {
 	// Fill in the username
 	userNameInput.Fill(*username)
 	//log.Printf("Element: %#v", passwordInput)
-	logger.Debug(fmt.Sprintf("UserName filled in %#v", *username))
+	logger.Debug(fmt.Sprintf("UserName filled in %v", *username))
 
 	// Click continue
 	continueButton := page.Locator("#UserName > div.buttons > button")
@@ -301,7 +301,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not get reportSelectItems: %v", err)
 	}
-	logger.Debug(fmt.Sprintf("reportSelectItems: %#v", reportSelectItems))
+	//logger.Debug(fmt.Sprintf("reportSelectItems: %#v", reportSelectItems))
 
 	var foundReport bool
 	// All dates value
@@ -399,22 +399,35 @@ func main() {
 		logger.Debug(fmt.Sprintf("PDFLink html: %#v", html))
 
 		// Open the window ...
-		err = PDFLink.Click()
+		err = PDFLink.Click(playwright.LocatorClickOptions{
+			Button:      nil,
+			ClickCount:  nil,
+			Delay:       nil,
+			Force:       nil,
+			Modifiers:   nil,
+			NoWaitAfter: nil,
+			Position:    nil,
+			Timeout:     playwright.Float(30000),
+			Trial:       nil,
+		})
 		if err != nil {
 			log.Fatalf("could not click PDFLink: %v", err)
 		}
 		err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-			State:   playwright.LoadStateDomcontentloaded,
-			Timeout: playwright.Float(30000),
+			State:   playwright.LoadStateNetworkidle,
+			Timeout: playwright.Float(10000),
 		})
+		if err != nil {
+			log.Fatalf("could not LoadStateNetworkidle: %v", err)
+		}
 		logger.Debug("PDFLink clicked")
 
 		// Get the close button for the PDF window ...
 		// #ViewBills > div.view.extraLarge > div > div.section.buttons.buttonsSection > button
-		closeButton := page.Locator("#ViewBills > div.view.extraLarge > div > div.section.buttons.buttonsSection > button")
-		err = closeButton.WaitFor()
+		PDFPopupCloseButton := page.Locator("#ViewBills > div.view.extraLarge > div > div.section.buttons.buttonsSection > button")
+		err = PDFPopupCloseButton.WaitFor()
 		if err != nil {
-			log.Fatalf("could not WaitFor closeButton: %v", err)
+			log.Fatalf("could not WaitFor PDFPopupCloseButton: %v", err)
 		}
 
 		// Get the selector for the iframe
@@ -427,10 +440,11 @@ func main() {
 		if err != nil {
 			log.Fatalf("could not get billSelectorReady: %v", err)
 		}
-		if !billSelectorReady {
+		if billSelectorReady {
 
 			var options interface{}
 
+			// Get the options
 			options, err = billSelector.Evaluate(`element => Array.from(element.options).map(option => option.value)`, nil)
 			if err != nil {
 				log.Fatalf("could not get select options: %v", err)
@@ -448,18 +462,27 @@ func main() {
 				if err != nil {
 					log.Fatalf("%d could not select option: %v", optno, err)
 				}
+				err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+					State:   playwright.LoadStateNetworkidle,
+					Timeout: playwright.Float(10000),
+				})
+				if err != nil {
+					log.Fatalf("%d could not WaitFor billSelector: %v", optno, err)
+				}
 				logger.Debug(fmt.Sprintf("Processing selectedOption: %#v", selectedOption))
 				frameMe := page.Locator("iframe")
+				err = frameMe.WaitFor(playwright.LocatorWaitForOptions{
+					Timeout: playwright.Float(10000),
+				})
+				if err != nil {
+					log.Fatalf("could not WaitFor frameMe: %v", err)
+				}
 				var frameMeCount int
 				frameMeCount, err = frameMe.Count()
 				if err != nil {
 					log.Fatalf("could not get frameMeCount: %v", err)
 				}
 				if frameMeCount == 0 {
-					err = CloseBillWindow(closeButton)
-					if err != nil {
-						log.Fatalf("could not click closeButton: %v", err)
-					}
 					continue
 				}
 				logger.Debug(fmt.Sprintf("frameMeCount: %#v", frameMeCount))
@@ -467,7 +490,7 @@ func main() {
 				if err != nil {
 					log.Fatalf("could not get html: %v", err)
 				}
-				logger.Debug(fmt.Sprintf("frameMe html: %v", html))
+				logger.Info(fmt.Sprintf("frameMe html: %v", html))
 
 				var newPage playwright.Page
 				newPage, err = browser.NewPage()
@@ -482,27 +505,23 @@ func main() {
 					log.Fatalf("could not goto: %v", response.Status())
 				}
 
+				//Python code to get the PDF
+				//pdf = client.send("Page.captureSnapshot")['data']
+				//save_mhtml(path, mhtml)
+				var cdpsession playwright.CDPSession
+				cdpsession, err = newPage.Context().NewCDPSession(newPage)
+				if err != nil {
+					log.Fatalf("could not get cdbsession: %v", err)
+				}
+				params := make(map[string]interface{})
+				params["format"] = "mhtml"
+				var mhtml interface{}
+				mhtml, err = cdpsession.Send("Page.captureSnapshot", params)
+				if err != nil {
+					log.Fatalf("could not get pdf: %v", err)
+				}
+				logger.Debug(fmt.Sprintf("pdf: %#v", mhtml))
 				NewPages = append(NewPages, newPage)
-				// for (const node of $('#viewer').shadowRoot.childNodes) { if (node.nodeName === "VIEWER-TOOLBAR") {console.log(node.shadowRoot)} }
-				//viewerToolbar := newPage.Locator("#viewer")
-				//err = viewerToolbar.WaitFor()
-				//if err != nil {
-				//	log.Fatalf("could not WaitFor viewerToolbar: %v", err)
-				//}
-				//html, err = viewerToolbar.Evaluate("el => el.shadowRoot.childNodes", nil)
-				//if err != nil {
-				//	log.Fatalf("could not get html: %v", err)
-				//}
-				//
-				//logger.Debug(fmt.Sprintf("newPage html: %#v", html))
-				// #ViewBills > div.view.extraLarge > div > div.container.sectionsContainer > div.section.content.contentSection.clear > div.area.billimage.clear > div.areaContent
-				// Get the displayArea item
-				//displayArea := page.FrameLocator("iframe")
-				//embed := displayArea.Locator("body")
-				//html, err = embed.InnerHTML()
-				//if err != nil {
-				//	log.Fatalf("could not get html: %v", err)
-				//}
 
 				// Get image billButton
 				billNewWindowLink := page.Locator("#ViewBills > div.view.extraLarge > div > div.container.sectionsContainer > div.section.content.contentSection.clear > div.area.billimage.clear > div.areaHeader > span.newWindow > a")
@@ -511,17 +530,12 @@ func main() {
 				})
 				if err != nil {
 					log.Printf("could not WaitFor billNewWindowLink: %v", err)
-					err = CloseBillWindow(closeButton)
-					if err != nil {
-						logger.Error(fmt.Sprintf("could not click closeButton: %v", err))
-					}
 					continue
 				}
 				var innerHTML string
 				innerHTML, err = billNewWindowLink.InnerHTML()
 				if err != nil {
 					log.Printf("could not get innerHTML: %v", err)
-					err = CloseBillWindow(closeButton)
 					continue
 				}
 				logger.Debug(fmt.Sprintf("innerHTML: %#v", innerHTML))
@@ -529,10 +543,6 @@ func main() {
 				billNewWindowLinkCount, err = billNewWindowLink.Count()
 				if err != nil {
 					logger.Error(fmt.Sprintf("could not get image billNewWindowLinkCount: %v", err))
-					err = CloseBillWindow(closeButton)
-					if err != nil {
-						log.Fatalf("could not click closeButton: %v", err)
-					}
 					continue
 				}
 				// Has an image PDFLink in the window, so click i
@@ -541,10 +551,6 @@ func main() {
 					outerHtml, err = billNewWindowLink.Evaluate("el => el.outerHTML", nil, playwright.LocatorEvaluateOptions{Timeout: playwright.Float(30000)})
 					if err != nil {
 						logger.Error(fmt.Sprintf("could not get image billNewWindowLink outerHTML: %v", err))
-						err = CloseBillWindow(closeButton)
-						if err != nil {
-							logger.Error(fmt.Sprintf("could not click closeButton: %v", err))
-						}
 						continue
 					}
 					linkText := fmt.Sprintf("%v", outerHtml)
@@ -583,15 +589,19 @@ func main() {
 					}
 					logger.Debug(fmt.Sprintf("popup html: %#v", html))
 
-					err = CloseBillWindow(closeButton)
-					if err != nil {
-						logger.Error(fmt.Sprintf("could not click closeButton: %v", err))
-					}
+					// Close the popup window (probably wouldn't need this if we get the right URL without clicking the
+					// link to open in a new window)
 					err = popup.Close()
 					if err != nil {
 						log.Fatalf("could not close popup: %v", err)
 					}
 				}
+
+			}
+			// Done with the selects, so close the window
+			err = CloseBillWindow(PDFPopupCloseButton)
+			if err != nil {
+				logger.Error(fmt.Sprintf("could not click PDFPopupCloseButton: %v", err))
 			}
 			log.Printf("%d NewPages", len(NewPages))
 			// Close the billNewWindowLink window
