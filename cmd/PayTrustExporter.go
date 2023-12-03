@@ -6,19 +6,24 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"github.com/playwright-community/playwright-go"
+	"io"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
 	"strings"
-
-	"github.com/playwright-community/playwright-go"
 )
 
+// lvl is global, so we can set it from the command line
 var lvl = new(slog.LevelVar)
+
+// logger is global, so we can use it everywhere in the script
 var logger *slog.Logger
 
+// Main entry point for execution
 func main() {
 
 	// Arguments for 1Password vault and tags to use to get password
@@ -108,31 +113,35 @@ func main() {
 	}
 
 	// Enter username
-	userName := page.Locator("#UserName input[type=text]")
-	err = userName.WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000), // wait for 5 seconds
-	})
+	userNameInput := page.Locator("#UserName input[type=text]")
+
+	// Get the count to see if we found it ...
+	var UserNameInputCount int
+
+	// See if we found it ...
+	UserNameInputCount, err = userNameInput.Count()
 	if err != nil {
-		log.Fatalf("could not wait for userName: %v", err)
+		log.Fatalf("could not get passwordInput: %v", err)
+	}
+	// If we didn't find it, we are done
+	if UserNameInputCount == 0 {
+		log.Fatalf("could not find passwordInput")
 	}
 
 	// Fill in the username
-	err = userName.Fill(*username)
-	if err != nil {
-		log.Fatalf("could not fill in userName: %v", err)
-	}
-	//log.Printf("Element: %#v", userName)
-	logger.Debug("UserName filled in", *username)
+	userNameInput.Fill(*username)
+	//log.Printf("Element: %#v", passwordInput)
+	logger.Debug(fmt.Sprintf("UserName filled in %#v", *username))
 
 	// Click continue
 	continueButton := page.Locator("#UserName > div.buttons > button")
-	err = continueButton.WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000), // wait for 5 seconds
-	})
+	var continueButtonCount int
+	continueButtonCount, err = continueButton.Count()
 	if err != nil {
-		log.Fatalf("could not wait for continue button: %v", err)
+		log.Fatalf("could not get continueButton: %v", err)
+	}
+	if continueButtonCount == 0 {
+		log.Fatalf("could not find continueButton")
 	}
 
 	//log.Printf("continuButton: %#v", continueButton)
@@ -141,49 +150,60 @@ func main() {
 		log.Fatalf("could not click continueButton: %v", err)
 	}
 	logger.Debug("Continue button clicked")
-
-	// Get the form
-	form := page.Locator("div.page.authentication > div.region.right > form")
-	err = form.WaitFor(playwright.LocatorWaitForOptions{
-		State:   playwright.WaitForSelectorStateVisible,
-		Timeout: playwright.Float(5000), // wait for 5 seconds
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State:   playwright.LoadStateDomcontentloaded,
+		Timeout: playwright.Float(3000),
 	})
 	if err != nil {
-		log.Fatalf("could not wait for form: %v", err)
+		log.Fatalf("could not WaitForLoadState: %v", err)
 	}
-	formHTML, err := form.Evaluate("el => el.outerHTML", nil)
-	formCount, err := page.Locator("div.page.authentication > div.region.right > form").Count()
+
+	authForm := page.Locator("div.page.authentication > div.region.right > form")
+	err = authForm.WaitFor(playwright.LocatorWaitForOptions{
+		Timeout: playwright.Float(3000),
+	})
+	if err != nil {
+		log.Fatalf("could not WaitFor authForm: %v", err)
+	}
+	// See if we need to do phone verification
+	formCount, err := authForm.Count()
 	if err != nil {
 		logger.Error("Could not get form: %v", err)
 	}
-	// This is where the phone call could happen ...
-	// https://login.billscenter.paytrust.com/3004/OOBA/Preview
-	if formCount == 1 && strings.Contains(fmt.Sprintf("%v", formHTML), "OOBA/Preview") {
-		logger.Info("Handling the logic to for phone verification")
-		// We need to wait for the phone call to finish
-		ManualStepCompletion("Phone call received")
+	// On the password page, there are two forms. On the phone verification page, there is one
+	if formCount == 1 {
+		formHTML, err := authForm.Evaluate("el => el.outerHTML", nil)
+		if err != nil {
+			log.Fatalf("could not get html: %v", err)
+		}
+		// This is where the phone call could happen ...
+		// https://login.billscenter.paytrust.com/3004/OOBA/Preview
+		if strings.Contains(fmt.Sprintf("%v", formHTML), "OOBA/Preview") {
+			logger.Info("Handling the logic to for phone verification")
+			// We need to wait for the phone call to finish
+			ManualStepCompletion("Phone call received")
+		}
 	}
 
 	// Enter password
-	userName = page.Locator("#Password")
-	//log.Printf("Element: %#v", userName)
+	passwordInput := page.Locator("#Password")
+	passwordInput.WaitFor()
+	//log.Printf("Element: %#v", passwordInput)
 	var passwordInputCount int
-	passwordInputCount, err = userName.Count()
+	passwordInputCount, err = passwordInput.Count()
 	if err != nil {
-		log.Fatalf("could not get userName: %v", err)
+		log.Fatalf("could not get passwordInput: %v", err)
 	}
 	if passwordInputCount == 0 {
-		log.Fatalf("could not find userName")
+		log.Fatalf("could not find passwordInput")
 	}
-	err = userName.Fill(*password)
-	if err != nil {
-		log.Fatalf("could not fill in userName: %v", err)
-	}
-	logger.Debug("Password filled in", *password)
+	passwordInput.Fill(*password)
+	logger.Debug("Password filled in")
 
 	// Click continue
 	// Selector from browser: body > div > div.region.right > form:nth-child(3) > div.buttons > button.button.primary
-	signonButton := page.Locator("form:nth-child(3) > div.buttons > button.button.primary")
+	// TODO: Find a better way to do this (I feel like this is brittle)
+	signonButton := page.Locator("body > div > div.region.right > form:nth-child(3) > div.buttons > button.button.primary")
 	signonButtonCount, err := signonButton.Count()
 	if err != nil {
 		log.Fatalf("could not get signonButton: %v", err)
@@ -197,11 +217,17 @@ func main() {
 		log.Fatalf("could not click signonButton: %v", err)
 	}
 	logger.Debug("Signon clicked")
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State: playwright.LoadStateDomcontentloaded,
+	})
+	if err != nil {
+		log.Fatalf("could not WaitForLoadState from signon button: %v", err)
+	}
 
 	// Should be logged in now
 	// 	// body > div.ui-dialog.ui-corner-all.ui-widget.ui-widget-content.ui-front.EPP > div.ui-dialog-titlebar.ui-corner-all.ui-widget-header.ui-helper-clearfix > button
 	noticeClear := page.Locator(`button[title="Close"]`)
-	log.Printf("noticeClear: %#v", noticeClear)
+	err = noticeClear.WaitFor()
 	noticeClearCount, err := noticeClear.Count()
 	if err != nil {
 		log.Fatalf("could not get noticeClear dropDownItemsCount: %v", err)
@@ -247,6 +273,7 @@ func main() {
 
 	// Get the view options
 	reportOptions := page.Locator("#Reports_ViewReportsReportDropdown_Input_Responsive")
+	reportOptions.WaitFor()
 	//log.Printf("reportOptions: %#v", reportOptions)
 	selectionItemCount, err := reportOptions.Count()
 	if err != nil {
@@ -267,49 +294,86 @@ func main() {
 	if dropDownItemsCount == 0 {
 		log.Fatalf("could not find dropDownItems")
 	}
-	logger.Debug("dropDownItems: %#v", dropDownItemsCount)
+	logger.Debug(fmt.Sprintf("dropDownItems: %#v", dropDownItemsCount))
 
 	// Get the drop down items
 	reportSelectItems, err := dropDownItems.All()
 	if err != nil {
 		log.Fatalf("could not get reportSelectItems: %v", err)
 	}
-	logger.Debug("reportSelectItems: %#v", reportSelectItems)
+	logger.Debug(fmt.Sprintf("reportSelectItems: %#v", reportSelectItems))
 
 	var foundReport bool
 	// All dates value
 	allDates := "Include All Dates"
+	var text string
 	for _, item := range reportSelectItems {
-		text, err := item.TextContent()
+		text, err = item.TextContent()
 		if err != nil {
 			log.Fatalf("could not get text: %v", err)
 		}
 		if strings.Contains(text, allDates) {
-			log.Printf("Found All Dates")
+			logger.Debug("Found All Dates")
 			foundReport = true
+			reportTitleSelector := fmt.Sprintf("#Reports_ViewReportViewDiv > div.container.sectionsContainer > div.section.content.contentSection.clear > div.report-title > h1", allDates)
+			reportTitle := page.Locator(reportTitleSelector)
+			err = reportTitle.WaitFor(playwright.LocatorWaitForOptions{
+				State:   playwright.WaitForSelectorStateAttached,
+				Timeout: playwright.Float(10000),
+			})
+			_, err = reportTitle.Evaluate("el => el.remove()", nil)
+			if err != nil {
+				log.Fatalf("could not remove reportTitle: %v", err)
+			}
+
 			err = item.Click()
 			if err != nil {
 				log.Fatalf("could not click All Dates: %v", err)
 			}
+
+			reportTitleSelector = fmt.Sprintf(reportTitleSelector)
+			err = page.Locator(reportTitleSelector).WaitFor(playwright.LocatorWaitForOptions{
+				State:   playwright.WaitForSelectorStateAttached,
+				Timeout: playwright.Float(10000),
+			})
+			if err != nil {
+				log.Fatalf("Report took too long to load after clicking All Dates: %v", err)
+			}
+			logger.Debug("All Dates clicked and title ready")
 			break
 		}
 	}
+	// If we didn't find the report, we are done
 	if !foundReport {
 		log.Fatalf("could not find report for %#v", allDates)
 	}
-	logger.Debug("Found All Dates in selections")
 
-	// Click the All Dates report
+	// Wait for the report to load
+	err = page.Locator("tr.total > td.totalLabel > div.totalDiv > span.totalLabel").WaitFor(playwright.LocatorWaitForOptions{
+		State:   playwright.WaitForSelectorStateAttached,
+		Timeout: playwright.Float(10000),
+	})
+	if err != nil {
+		log.Fatalf("could not WaitFor totalLabel: %v", err)
+	}
 
 	// So now we have the report up, get all the PDF links
-	// #subcategory\ Fis\.Epp\.DomainModel\.BillPay\.ReportGroup > tbody > tr:nth-child(2) > td.column.bill > button
+	// selector #subcategory\\ Fis\\.Epp\\.DomainModel\\.BillPay\\.ReportGroup > tbody > tr > td.column.bill > billButton
+	PDFLinks := page.Locator("tr > td.column.bill > button.billIcon")
+	err = PDFLinks.Last().WaitFor(
+		playwright.LocatorWaitForOptions{
+			State:   playwright.WaitForSelectorStateAttached,
+			Timeout: playwright.Float(10000),
+		})
+	if err != nil {
+		log.Fatalf("could not WaitFor PDFLinks: %v", err)
+	}
 	var PDFLinksCount int
-	PDFLinks := page.Locator("button.bill.billIcon")
 	PDFLinksCount, err = PDFLinks.Count()
 	if err != nil {
-		log.Fatalf("could not get dropDownItemsCount of links: %v", err)
+		log.Fatalf("could not get PDFLinksCount of links: %v", err)
 	}
-	log.Printf("PDFLinks: %#v", PDFLinksCount)
+	log.Printf("PDFLinksCount: %#v", PDFLinksCount)
 	// No PDF links, so we are done
 	if PDFLinksCount == 0 {
 		log.Fatalf("No PDFLinks")
@@ -322,8 +386,9 @@ func main() {
 	if len(PDFLinksAll) == 0 {
 		log.Fatalf("No PDFLinksAll")
 	}
-	logger.Debug("PDFLinksAll: %#v", PDFLinksAll)
+	logger.Debug(fmt.Sprintf("PDFLinksAll: %#v", len(PDFLinksAll)))
 
+	var NewPages []playwright.Page
 	// Loop through all the links ....
 	for _, PDFLink := range PDFLinksAll {
 		var html interface{}
@@ -331,28 +396,123 @@ func main() {
 		if err != nil {
 			log.Fatalf("could not get html: %v", err)
 		}
-		logger.Debug("PDFLink html: %#v", html)
+		logger.Debug(fmt.Sprintf("PDFLink html: %#v", html))
 
 		// Open the window ...
 		err = PDFLink.Click()
 		if err != nil {
 			log.Fatalf("could not click PDFLink: %v", err)
 		}
+		err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+			State:   playwright.LoadStateDomcontentloaded,
+			Timeout: playwright.Float(30000),
+		})
 		logger.Debug("PDFLink clicked")
 
-		// Get image PDFLink
-		billWindowButton := page.Locator("#ViewBills > div.view.extraLarge > div > div.container.sectionsContainer > div.section.content.contentSection.clear > div.area.billimage.clear > div.areaHeader > span.newWindow > a")
-		billWindowButtonCount, err := billWindowButton.Count()
+		// #ViewBills > div.view.extraLarge > div > div.section.buttons.buttonsSection > button
+		closeButton := page.Locator("#ViewBills > div.view.extraLarge > div > div.section.buttons.buttonsSection > button")
+		err = closeButton.WaitFor()
 		if err != nil {
-			log.Printf("could not get image PDFLink dropDownItemsCount: %v", err)
+			log.Fatalf("could not WaitFor closeButton: %v", err)
+		}
+
+		frameMe := page.Locator("iframe")
+		var frameMeCount int
+		frameMeCount, err = frameMe.Count()
+		if err != nil {
+			log.Fatalf("could not get frameMeCount: %v", err)
+		}
+		if frameMeCount == 0 {
+			err = CloseBillWindow(closeButton)
+			if err != nil {
+				log.Fatalf("could not click closeButton: %v", err)
+			}
+			continue
+		}
+		logger.Debug(fmt.Sprintf("frameMeCount: %#v", frameMeCount))
+		html, err = frameMe.GetAttribute("src")
+		if err != nil {
+			log.Fatalf("could not get html: %v", err)
+		}
+		logger.Debug(fmt.Sprintf("frameMe html: %v", html))
+
+		var newPage playwright.Page
+		newPage, err = browser.NewPage()
+		if err != nil {
+			log.Fatalf("could not create newPage: %v", err)
+		}
+
+		if response, err = newPage.Goto(fmt.Sprintf("%v", html)); err != nil {
+			log.Fatalf("could not go to %v: %v", *url, err)
+		}
+		if response.Status() != 200 {
+			log.Fatalf("could not goto: %v", response.Status())
+		}
+
+		NewPages = append(NewPages, newPage)
+		// for (const node of $('#viewer').shadowRoot.childNodes) { if (node.nodeName === "VIEWER-TOOLBAR") {console.log(node.shadowRoot)} }
+		//viewerToolbar := newPage.Locator("#viewer")
+		//err = viewerToolbar.WaitFor()
+		//if err != nil {
+		//	log.Fatalf("could not WaitFor viewerToolbar: %v", err)
+		//}
+		//html, err = viewerToolbar.Evaluate("el => el.shadowRoot.childNodes", nil)
+		//if err != nil {
+		//	log.Fatalf("could not get html: %v", err)
+		//}
+		//
+		//logger.Debug(fmt.Sprintf("newPage html: %#v", html))
+		// #ViewBills > div.view.extraLarge > div > div.container.sectionsContainer > div.section.content.contentSection.clear > div.area.billimage.clear > div.areaContent
+		// Get the displayArea item
+		//displayArea := page.FrameLocator("iframe")
+		//embed := displayArea.Locator("body")
+		//html, err = embed.InnerHTML()
+		//if err != nil {
+		//	log.Fatalf("could not get html: %v", err)
+		//}
+
+		// Get image billButton
+		billNewWindowLink := page.Locator("#ViewBills > div.view.extraLarge > div > div.container.sectionsContainer > div.section.content.contentSection.clear > div.area.billimage.clear > div.areaHeader > span.newWindow > a")
+		err = billNewWindowLink.WaitFor(playwright.LocatorWaitForOptions{
+			Timeout: playwright.Float(5000),
+		})
+		if err != nil {
+			log.Printf("could not WaitFor billNewWindowLink: %v", err)
+			err = CloseBillWindow(closeButton)
+			if err != nil {
+				logger.Error(fmt.Sprintf("could not click closeButton: %v", err))
+			}
+			continue
+		}
+		var innerHTML string
+		innerHTML, err = billNewWindowLink.InnerHTML()
+		if err != nil {
+			log.Printf("could not get innerHTML: %v", err)
+			err = CloseBillWindow(closeButton)
+			continue
+		}
+		logger.Debug(fmt.Sprintf("innerHTML: %#v", innerHTML))
+		var billNewWindowLinkCount int
+		billNewWindowLinkCount, err = billNewWindowLink.Count()
+		if err != nil {
+			logger.Error(fmt.Sprintf("could not get image billNewWindowLinkCount: %v", err))
+			err = CloseBillWindow(closeButton)
+			if err != nil {
+				log.Fatalf("could not click closeButton: %v", err)
+			}
 			continue
 		}
 		// Has an image PDFLink in the window, so click i
-		if billWindowButtonCount == 1 {
+		if billNewWindowLinkCount == 1 {
 			var outerHtml interface{}
-			outerHtml, err = billWindowButton.Evaluate("el => el.outerHTML", nil)
+			outerHtml, err = billNewWindowLink.Evaluate("el => el.outerHTML", nil, playwright.LocatorEvaluateOptions{Timeout: playwright.Float(30000)})
 			if err != nil {
-				log.Fatalf("could not get html: %v", err)
+				logger.Error(fmt.Sprintf("could not get image billNewWindowLink outerHTML: %v", err))
+				err = CloseBillWindow(closeButton)
+				if err != nil {
+					logger.Error(fmt.Sprintf("could not click closeButton: %v", err))
+				}
+				continue
 			}
 			linkText := fmt.Sprintf("%v", outerHtml)
 
@@ -361,76 +521,48 @@ func main() {
 			res := re.FindAllStringSubmatch(linkText, 1)
 			log.Printf("linkText href: %#v", res[0][1])
 
-			// Close the window
-			// body > div:nth-child(12) > div.ui-dialog-titlebar.ui-corner-all.ui-widget-header.ui-helper-clearfix > button
-			closeButton := page.Locator("div.section.buttons.buttonSection > button.ui-dialog-titlebar-close")
-			closeButtonCount, err := closeButton.Count()
+			page.OnDialog(func(dialog playwright.Dialog) {
+				// Get dialog path
+				content, err := dialog.Page().Content()
+				if err != nil {
+					log.Fatalf("could not get dialog path: %v", err)
+				}
+				logger.Debug("dialog content: %#v", content)
+			})
+			// Click the open in new window link ...
+			err = billNewWindowLink.Click()
 			if err != nil {
-				log.Fatalf("could not get closeButton dropDownItemsCount: %v", err)
-				continue
+				log.Fatalf("could not click billNewWindowLink: %v", err)
 			}
-			if closeButtonCount != 1 {
-				log.Fatalf("could not find closeButton")
-			}
-			err = closeButton.Click()
+			var popup playwright.Page
+			popup, err = page.ExpectPopup(func() error {
+				logger.Debug("ExpectPopup")
+				return nil
+			},
+			)
 			if err != nil {
-				log.Fatalf("could not click closeButton: %v", err)
+				log.Fatalf("could not get popup: %v", err)
+			}
+
+			html, err = popup.Content()
+			if err != nil {
+				log.Fatalf("could not get content: %v", err)
+			}
+			logger.Debug(fmt.Sprintf("popup html: %#v", html))
+
+			err = CloseBillWindow(closeButton)
+			if err != nil {
+				logger.Error(fmt.Sprintf("could not click closeButton: %v", err))
+			}
+			err = popup.Close()
+			if err != nil {
+				log.Fatalf("could not close popup: %v", err)
 			}
 			continue
-			// Download the PDF using the URL we found
-			// https://login.billscenter.paytrust.com/3004/Document/Download?documentId=1234567890
-
-			logger.Debug("Processing billWindowButton")
-			// Open the bill window
-			billWindowButton.Click()
-			logger.Debug("billWindowButton clicked")
-
-			// See if there is an e-bill PDFLink in the window
-			ebillLink := page.Locator("#PaymentSection > div.subcontent > div.sidebar.reportSelectItems > PDFLink.bill")
-			ebillLinkCount, err := ebillLink.Count()
-			if err != nil {
-				log.Printf("could not get ebill PDFLink dropDownItemsCount: %v", err)
-				continue
-			}
-			if ebillLinkCount == 1 {
-				// We have a bill to download.
-				ebillLink.Click()
-				logger.Debug("ebillLink clicked")
-
-				pdf := page.Locator("body > embed")
-				pdfCount, err := pdf.Count()
-				if err != nil {
-					log.Fatalf("could not get pdf dropDownItemsCount: %v", err)
-				}
-				logger.Debug("pdfCount: %#v", pdfCount)
-
-				// Get the OuterHTML of the PDF
-				pdfHTML, err := pdf.Evaluate("el => el.outerHTML", nil)
-				if err != nil {
-					log.Fatalf("could not get html: %v", err)
-				}
-				logger.Debug("pdfHTML: %#v", pdfHTML)
-				// This is where we would download the PDF
-				logger.Info("Download PDF for %v", html)
-
-				// Close the PDF window
-				closeButton := page.Locator("body > div:nth-child(11) > div.ui-dialog-titlebar.ui-corner-all.ui-widget-header.ui-helper-clearfix > PDFLink")
-				closeButtonCount, err := closeButton.Count()
-				if err != nil {
-					log.Fatalf("could not get closeButton dropDownItemsCount: %v", err)
-					continue
-				}
-				if closeButtonCount == 1 {
-					closeButton.Click()
-					logger.Debug("closeButton clicked")
-				}
-			}
-			// Close the image window
-			closeButton = page.Locator("body > div:nth-child(11) > div.ui-dialog-titlebar.ui-corner-all.ui-widget-header.ui-helper-clearfix > PDFLink")
-			closeButton.Click()
 		}
-		// Close the billWindowButton window
-		closeBillWindowButton := page.Locator("body > div:nth-child(11) > div.ui-dialog-titlebar.ui-corner-all.ui-widget-header.ui-helper-clearfix > PDFLink")
+		log.Printf("%d NewPages", len(NewPages))
+		// Close the billNewWindowLink window
+		closeBillWindowButton := page.Locator("body > div:nth-child(11) > div.ui-dialog-titlebar.ui-corner-all.ui-widget-header.ui-helper-clearfix > billButton")
 		closeBillWindowButtonCount, err := closeBillWindowButton.Count()
 		if err != nil {
 			log.Fatalf("could not get closeBillWindowButton dropDownItemsCount: %v", err)
@@ -440,6 +572,39 @@ func main() {
 			logger.Debug("closeBillWindowButton clicked")
 		}
 	}
+}
+
+func CloseBillWindow(closeButton playwright.Locator) (err error) {
+	// Close the dialog for the bill ...
+	err = closeButton.WaitFor()
+	if err != nil {
+		logger.Error(fmt.Sprintf("could not WaitFor closeButton: %v", err))
+		return
+	}
+	err = closeButton.Click()
+	return
+}
+
+// GetPDF - get the PDF from the URL
+func GetPDF(html string) (PDFbody []byte, err error) {
+	var resp *http.Response
+
+	// Set up HTTP client
+	resp, err = http.Get(fmt.Sprintf("%v", html))
+	if err != nil {
+		logger.Error(fmt.Sprintf("could not get PDF: %v", err))
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		log.Fatalf("could not get PDF: %v", resp.StatusCode)
+	}
+	PDFbody, err = io.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatalf("could not read PDF body: %v", err)
+	}
+
+	return
+
 }
 
 func GetPasswordFromVault(vault *string, tags *string) (vaultUserName string, vaultPassword string) {
@@ -457,7 +622,6 @@ func GetPasswordFromVault(vault *string, tags *string) (vaultUserName string, va
 	}
 
 	vaultPassword = strings.TrimSpace(string(passwordStdout.Bytes()))
-	logger.Debug("vaultPassword: %v", vaultPassword)
 
 	userNameCommand := exec.Command("sh", "-c", fmt.Sprintf(`op read op://%v/%v/username`, *vault, vaultEntries[0].ID))
 	var userNameStdOut, userNameStdErr bytes.Buffer
@@ -470,7 +634,7 @@ func GetPasswordFromVault(vault *string, tags *string) (vaultUserName string, va
 		log.Fatalf("Stderr: %v", string(userNameStdErr.Bytes()))
 	}
 	vaultUserName = strings.TrimSpace(string(userNameStdOut.Bytes()))
-	logger.Debug("vaultUserName: %v", vaultUserName)
+	logger.Debug(fmt.Sprintf("vaultUserName: %v", vaultUserName))
 	return vaultUserName, vaultPassword
 }
 
