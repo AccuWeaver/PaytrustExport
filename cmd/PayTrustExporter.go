@@ -475,13 +475,24 @@ func main() {
 					Timeout: playwright.Float(10000),
 				})
 				if err != nil {
-					log.Fatalf("could not WaitFor frameMe: %v", err)
+					logger.Error(fmt.Sprintf("could not WaitFor frameMe: %v", err))
+					err = CloseBillWindow(PDFPopupCloseButton)
+					if err != nil {
+						logger.Error(fmt.Sprintf("could not click PDFPopupCloseButton: %v", err))
+					}
+					break // Try the next one
 				}
 				var frameMeCount int
 				frameMeCount, err = frameMe.Count()
 				if err != nil {
-					log.Fatalf("could not get frameMeCount: %v", err)
+					logger.Error(fmt.Sprintf("could not WaitFor frameMe: %v", err))
+					err = CloseBillWindow(PDFPopupCloseButton)
+					if err != nil {
+						logger.Error(fmt.Sprintf("could not click PDFPopupCloseButton: %v", err))
+					}
+					break // Try the next one
 				}
+				
 				if frameMeCount == 0 {
 					continue
 				}
@@ -604,17 +615,18 @@ func main() {
 				logger.Error(fmt.Sprintf("could not click PDFPopupCloseButton: %v", err))
 			}
 			log.Printf("%d NewPages", len(NewPages))
-			// Close the billNewWindowLink window
-			closeBillWindowButton := page.Locator("body > div:nth-child(11) > div.ui-dialog-titlebar.ui-corner-all.ui-widget-header.ui-helper-clearfix > billButton")
-			closeBillWindowButtonCount, err := closeBillWindowButton.Count()
-			if err != nil {
-				log.Fatalf("could not get closeBillWindowButton dropDownItemsCount: %v", err)
-			}
-			if closeBillWindowButtonCount == 1 {
-				closeBillWindowButton.Click()
-				logger.Debug("closeBillWindowButton clicked")
-			}
 		}
+		// Close the billNewWindowLink window
+		closeBillWindowButton := page.Locator("body > div:nth-child(11) > div.ui-dialog-titlebar.ui-corner-all.ui-widget-header.ui-helper-clearfix > billButton")
+		closeBillWindowButtonCount, err := closeBillWindowButton.Count()
+		if err != nil {
+			log.Fatalf("could not get closeBillWindowButton dropDownItemsCount: %v", err)
+		}
+		if closeBillWindowButtonCount == 1 {
+			closeBillWindowButton.Click()
+			logger.Debug("closeBillWindowButton clicked")
+		}
+
 	}
 }
 
