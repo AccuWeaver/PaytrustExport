@@ -492,7 +492,7 @@ func main() {
 					}
 					break // Try the next one
 				}
-				
+
 				if frameMeCount == 0 {
 					continue
 				}
@@ -509,6 +509,7 @@ func main() {
 					log.Fatalf("could not create newPage: %v", err)
 				}
 
+				// Open the url in the new page (this is the PDF)
 				if response, err = newPage.Goto(fmt.Sprintf("%v", html)); err != nil {
 					log.Fatalf("could not go to %v: %v", *url, err)
 				}
@@ -519,19 +520,21 @@ func main() {
 				//Python code to get the PDF
 				//pdf = client.send("Page.captureSnapshot")['data']
 				//save_mhtml(path, mhtml)
-				var cdpsession playwright.CDPSession
-				cdpsession, err = newPage.Context().NewCDPSession(newPage)
-				if err != nil {
-					log.Fatalf("could not get cdbsession: %v", err)
-				}
-				params := make(map[string]interface{})
-				params["format"] = "mhtml"
-				var mhtml interface{}
-				mhtml, err = cdpsession.Send("Page.captureSnapshot", params)
-				if err != nil {
-					log.Fatalf("could not get pdf: %v", err)
-				}
-				logger.Debug(fmt.Sprintf("pdf: %#v", mhtml))
+				//var cdpsession playwright.CDPSession
+				//cdpsession, err = newPage.Context().NewCDPSession(newPage)
+				//if err != nil {
+				//	log.Fatalf("could not get cdbsession: %v", err)
+				//}
+				//params := make(map[string]interface{})
+				//params["format"] = "mhtml"
+				//var mhtml interface{}
+				//mhtml, err = cdpsession.Send("Page.captureSnapshot", params)
+				//if err != nil {
+				//	log.Fatalf("could not get pdf: %v", err)
+				//}
+				//logger.Debug(fmt.Sprintf("pdf: %#v", mhtml))
+				
+				// TODO: figure out how to save the new page as a PDF
 				NewPages = append(NewPages, newPage)
 
 				// Get image billButton
@@ -618,16 +621,24 @@ func main() {
 		}
 		// Close the billNewWindowLink window
 		closeBillWindowButton := page.Locator("body > div:nth-child(11) > div.ui-dialog-titlebar.ui-corner-all.ui-widget-header.ui-helper-clearfix > billButton")
-		closeBillWindowButtonCount, err := closeBillWindowButton.Count()
+		var closeBillWindowButtonCount int
+		closeBillWindowButtonCount, err = closeBillWindowButton.Count()
 		if err != nil {
 			log.Fatalf("could not get closeBillWindowButton dropDownItemsCount: %v", err)
+		}
+		err = closeBillWindowButton.WaitFor(playwright.LocatorWaitForOptions{
+			Timeout: playwright.Float(5000),
+		})
+		if err != nil {
+			log.Printf("could not WaitFor closeBillWindowButton: %v", err)
+			continue
 		}
 		if closeBillWindowButtonCount == 1 {
 			closeBillWindowButton.Click()
 			logger.Debug("closeBillWindowButton clicked")
 		}
 
-	}
+	} // End of looping through PDFLinks
 }
 
 func CloseBillWindow(closeButton playwright.Locator) (err error) {
