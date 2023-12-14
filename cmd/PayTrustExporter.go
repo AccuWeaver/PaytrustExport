@@ -65,111 +65,29 @@ func main() {
 
 	}
 
-	// Set up our run options
-	runOption := &playwright.RunOptions{
-		SkipInstallBrowsers: true,
-	}
-	// Install playwright
-	err := playwright.Install(runOption)
+	err, browser := GetBrowser()
 	if err != nil {
-		log.Fatalf("could not install playwright dependencies: %v", err)
+		log.Fatalf("could not get browser: %v", err)
 	}
 
-	// Playwright variable
-	var pw *playwright.Playwright
-	// Start playwright running
-	pw, err = playwright.Run()
-	if err != nil {
-		log.Fatalf("could not start playwright: %v", err)
-	}
-
-	// Browser to use
-	var browser playwright.Browser
-	browser, err = pw.Chromium.Launch(
-		playwright.BrowserTypeLaunchOptions{
-			// Apparently defaults to true
-			Headless: playwright.Bool(false),
-			Channel:  playwright.String("chrome"),
-		},
-	)
-	if err != nil {
-		log.Fatalf("could not launch browser: %v", err)
-	}
-
-	// Page object
 	var page playwright.Page
-	page, err = browser.NewPage()
+	page, err = GetPageLoaded(browser, url)
+
+	err = GetAndFill(page, "#UserName input[type=text]", *username)
 	if err != nil {
-		log.Fatalf("could not create page: %v", err)
+		logger.Error(fmt.Sprintf("could not fill in username: %v", err))
 	}
-
-	// Open Paytrust login page ...
-	var response playwright.Response
-	if response, err = page.Goto(*url); err != nil {
-		log.Fatalf("could not go to %v: %v", *url, err)
-	}
-	if response.Status() != 200 {
-		log.Fatalf("could not goto: %v", response.Status())
-	}
-
-	// Enter username
-	userNameInput := page.Locator("#UserName input[type=text]")
-
-	// Get the count to see if we found it ...
-	var UserNameInputCount int
-
-	// See if we found it ...
-	UserNameInputCount, err = userNameInput.Count()
-	if err != nil {
-		log.Fatalf("could not get passwordInput: %v", err)
-	}
-	// If we didn't find it, we are done
-	if UserNameInputCount == 0 {
-		log.Fatalf("could not find passwordInput")
-	}
-
-	// Fill in the username
-	userNameInput.Fill(*username)
 	//log.Printf("Element: %#v", passwordInput)
 	logger.Debug(fmt.Sprintf("UserName filled in %v", *username))
 
-	// Click continue
-	continueButton := page.Locator("#UserName > div.buttons > button")
-	var continueButtonCount int
-	continueButtonCount, err = continueButton.Count()
+	err = ClickAndWait(page, "#UserName > div.buttons > button")
 	if err != nil {
-		log.Fatalf("could not get continueButton: %v", err)
-	}
-	if continueButtonCount == 0 {
-		log.Fatalf("could not find continueButton")
-	}
-
-	//log.Printf("continuButton: %#v", continueButton)
-	err = continueButton.Click()
-	if err != nil {
-		log.Fatalf("could not click continueButton: %v", err)
+		logger.Error(fmt.Sprintf("could not click continue button: %v", err))
 	}
 	logger.Debug("Continue button clicked")
-	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
-		State:   playwright.LoadStateDomcontentloaded,
-		Timeout: playwright.Float(3000),
-	})
-	if err != nil {
-		log.Fatalf("could not WaitForLoadState: %v", err)
-	}
 
-	authForm := page.Locator("div.page.authentication > div.region.right > form")
-	err = authForm.WaitFor(playwright.LocatorWaitForOptions{
-		Timeout: playwright.Float(3000),
-	})
-	if err != nil {
-		log.Fatalf("could not WaitFor authForm: %v", err)
-	}
-	// See if we need to do phone verification
-	formCount, err := authForm.Count()
-	if err != nil {
-		logger.Error("Could not get form: %v", err)
-	}
+	authForm, err, formCount := FindAndWait(page, err)
+
 	// On the password page, there are two forms. On the phone verification page, there is one
 	if formCount == 1 {
 		formHTML, err := authForm.Evaluate("el => el.outerHTML", nil)
@@ -509,14 +427,6 @@ func main() {
 					log.Fatalf("could not create newPage: %v", err)
 				}
 
-				// Open the url in the new page (this is the PDF)
-				if response, err = newPage.Goto(fmt.Sprintf("%v", html)); err != nil {
-					log.Fatalf("could not go to %v: %v", *url, err)
-				}
-				if response.Status() != 200 {
-					log.Fatalf("could not goto: %v", response.Status())
-				}
-
 				//Python code to get the PDF
 				//pdf = client.send("Page.captureSnapshot")['data']
 				//save_mhtml(path, mhtml)
@@ -533,7 +443,7 @@ func main() {
 				//	log.Fatalf("could not get pdf: %v", err)
 				//}
 				//logger.Debug(fmt.Sprintf("pdf: %#v", mhtml))
-				
+
 				// TODO: figure out how to save the new page as a PDF
 				NewPages = append(NewPages, newPage)
 
@@ -641,6 +551,99 @@ func main() {
 	} // End of looping through PDFLinks
 }
 
+func FindAndWait(page playwright.Page, err error) (playwright.Locator, error, int) {
+	authForm := page.Locator("div.page.authentication > div.region.right > form")
+	err = authForm.WaitFor(playwright.LocatorWaitForOptions{
+		Timeout: playwright.Float(3000),
+	})
+	if err != nil {
+		log.Fatalf("could not WaitFor authForm: %v", err)
+	}
+
+	// See if we need to do phone verification
+	formCount, err := authForm.Count()
+	if err != nil {
+		logger.Error("Could not get form: %v", err)
+	}
+	return authForm, err, formCount
+}
+
+func ClickAndWait(page playwright.Page, selector string) (err error) {
+	// find the button
+	button := page.Locator(selector)
+	err = button.WaitFor()
+	if err != nil {
+		return fmt.Errorf("could not WaitFor button: %v", err)
+	}
+	// Click the button
+	err = button.Click()
+	if err != nil {
+		return fmt.Errorf("could not click button: %v", err)
+	}
+
+	err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
+		State:   playwright.LoadStateDomcontentloaded,
+		Timeout: playwright.Float(3000),
+	})
+	if err != nil {
+		return fmt.Errorf("could not WaitForLoadState: %v", err)
+	}
+	return
+}
+
+func GetPageLoaded(browser playwright.Browser, url *string) (page playwright.Page, err error) {
+
+	page, err = browser.NewPage()
+	if err != nil {
+		log.Fatalf("could not create page: %v", err)
+	}
+
+	// Open Paytrust login page ...
+	var response playwright.Response
+	if response, err = page.Goto(*url); err != nil {
+		err = fmt.Errorf("could not go to %v: %v", *url, err)
+	}
+	if response.Status() != 200 {
+		err = fmt.Errorf("could not goto: %v", response.Status())
+	}
+
+	return page, err
+}
+
+func GetBrowser() (error, playwright.Browser) {
+	// Set up our run options
+	runOption := &playwright.RunOptions{
+		SkipInstallBrowsers: true,
+	}
+	// Install playwright
+	err := playwright.Install(runOption)
+	if err != nil {
+		log.Fatalf("could not install playwright dependencies: %v", err)
+	}
+
+	// Playwright variable
+	var pw *playwright.Playwright
+	// Start playwright running
+	pw, err = playwright.Run()
+	if err != nil {
+		log.Fatalf("could not start playwright: %v", err)
+	}
+
+	// Browser to use
+	var browser playwright.Browser
+	browser, err = pw.Chromium.Launch(
+		playwright.BrowserTypeLaunchOptions{
+			// Apparently defaults to true
+			Headless: playwright.Bool(false),
+			Channel:  playwright.String("chrome"),
+		},
+	)
+	if err != nil {
+		log.Fatalf("could not launch browser: %v", err)
+	}
+	return err, browser
+}
+
 func CloseBillWindow(closeButton playwright.Locator) (err error) {
 	// Close the dialog for the bill ...
 	err = closeButton.WaitFor()
@@ -720,4 +723,59 @@ func ManualStepCompletion(taskString string) {
 		}
 
 	}
+}
+
+func GetAndFill(page playwright.Page, selector string, value string) (err error) {
+	// Get the count to see if we found it ...
+	var count int
+
+	// Get the locator
+	locator := page.Locator(selector)
+
+	// See if we found it ...
+	count, err = locator.Count()
+	if err != nil {
+		log.Fatalf("could not get locator: %v", err)
+	}
+	// If we didn't find it, we are done
+	if count == 0 {
+		err = fmt.Errorf("could not find %v", selector)
+		return
+	}
+
+	// Fill in the value
+	err = locator.Fill(value)
+	if err != nil {
+		err = fmt.Errorf("could not fill in value %v for %#v: %v", selector, value, err)
+	}
+	return
+}
+
+// DownloadURLtoFile - download a URL to a file
+func DownloadURLtoFile(url string, file string) (err error) {
+	// Get the data
+	var resp *http.Response
+	resp, err = http.Get(url)
+	if err != nil {
+		err = fmt.Errorf("could not get URL: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Create the file
+	var out *os.File
+	out, err = os.Create(file)
+	if err != nil {
+		err = fmt.Errorf("could not create file: %v", err)
+		return
+	}
+	defer out.Close()
+
+	// Write the body to file
+	_, err = io.Copy(out, resp.Body)
+	if err != nil {
+		err = fmt.Errorf("could not copy body to file: %v", err)
+		return
+	}
+	return
 }
