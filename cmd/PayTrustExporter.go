@@ -388,8 +388,11 @@ func main() {
 	}
 	logger.Debug(fmt.Sprintf("PDFLinksAll: %#v", len(PDFLinksAll)))
 
-	var NewPages []playwright.Page
+	var payeeNames []string
+
+	//var NewPages []playwright.Page
 	// Loop through all the links ....
+PDFLinks:
 	for _, PDFLink := range PDFLinksAll {
 		var html interface{}
 		html, err = PDFLink.Evaluate("el => el.outerHTML", nil)
@@ -397,6 +400,30 @@ func main() {
 			log.Fatalf("could not get html: %v", err)
 		}
 		logger.Debug(fmt.Sprintf("PDFLink html: %#v", html))
+
+		// document.querySelector("tr > td.column.bill > button.billIcon").parentElement.parentElement.querySelector("td.payeename").innerHTML
+		// Get the payeeName name by going up two levels and then finding the payeename cell
+		payeeNameLocator := PDFLink.Locator("..").Locator("..").Locator("td.payeename")
+		err = payeeNameLocator.WaitFor(playwright.LocatorWaitForOptions{
+			State:   playwright.WaitForSelectorStateAttached,
+			Timeout: playwright.Float(10000),
+		})
+		if err != nil {
+			log.Fatalf("could not WaitFor payeeNameLocator: %v", err)
+		}
+		var payeeName string
+		payeeName, err = payeeNameLocator.InnerHTML()
+		if err != nil {
+			log.Fatalf("could not get payeeName: %v", err)
+		}
+		payeeName = MakeFileName(strings.Split(payeeName, "<")[0])
+		log.Printf("payeeName: %#v", payeeName)
+		for _, name := range payeeNames {
+			if name == payeeName {
+				continue PDFLinks
+			}
+		}
+		payeeNames = append(payeeNames, payeeName)
 
 		// Open the window ...
 		err = PDFLink.Click(playwright.LocatorClickOptions{
@@ -455,10 +482,19 @@ func main() {
 				optionsArray[i] = fmt.Sprint(v)
 			}
 			logger.Debug(fmt.Sprintf("options: %#v", optionsArray))
+			var optionsLocators []playwright.Locator
+			optionsLocators, err = billSelector.Locator("option").All()
+			if err != nil {
+				log.Fatalf("could not get optionsLocators: %v", err)
+			}
 
+			var pdfCount int
+
+			// Loop through the options
 			for optno, option := range optionsArray {
-				var selectedOption []string
-				selectedOption, err = billSelector.SelectOption(playwright.SelectOptionValues{Values: &[]string{option}})
+				var selected []string
+				// Select the current option
+				selected, err = billSelector.SelectOption(playwright.SelectOptionValues{Values: &[]string{option}})
 				if err != nil {
 					log.Fatalf("%d could not select option: %v", optno, err)
 				}
@@ -467,29 +503,33 @@ func main() {
 					Timeout: playwright.Float(10000),
 				})
 				if err != nil {
-					log.Fatalf("%d could not WaitFor billSelector: %v", optno, err)
+					logger.Error(fmt.Sprintf("%d could not WaitFor option %d (%v): %v", optno, option, err))
+					continue
 				}
-				logger.Debug(fmt.Sprintf("Processing selectedOption: %#v", selectedOption))
+				logger.Debug(fmt.Sprintf("Processing selectedOption: %#v", selected))
+
+				// Get the selected option
+				selectedOption := optionsLocators[optno]
+				var selectedOptionText string
+				selectedOptionText, err = selectedOption.TextContent()
+				if err != nil {
+					logger.Error(fmt.Sprintf("could not get selectedOptionText: %v", err))
+					continue // Try the next one
+				}
+				selectedOptionText = MakeFileName(selectedOptionText)
+				// Get the iframe
 				frameMe := page.Locator("iframe")
 				err = frameMe.WaitFor(playwright.LocatorWaitForOptions{
 					Timeout: playwright.Float(10000),
 				})
 				if err != nil {
 					logger.Error(fmt.Sprintf("could not WaitFor frameMe: %v", err))
-					err = CloseBillWindow(PDFPopupCloseButton)
-					if err != nil {
-						logger.Error(fmt.Sprintf("could not click PDFPopupCloseButton: %v", err))
-					}
-					break // Try the next one
+					break // Assume we are done with this payee
 				}
 				var frameMeCount int
 				frameMeCount, err = frameMe.Count()
 				if err != nil {
 					logger.Error(fmt.Sprintf("could not WaitFor frameMe: %v", err))
-					err = CloseBillWindow(PDFPopupCloseButton)
-					if err != nil {
-						logger.Error(fmt.Sprintf("could not click PDFPopupCloseButton: %v", err))
-					}
 					break // Try the next one
 				}
 
@@ -499,146 +539,35 @@ func main() {
 				logger.Debug(fmt.Sprintf("frameMeCount: %#v", frameMeCount))
 				html, err = frameMe.GetAttribute("src")
 				if err != nil {
-					log.Fatalf("could not get html: %v", err)
-				}
-				logger.Info(fmt.Sprintf("frameMe html: %v", html))
-
-				var newPage playwright.Page
-				newPage, err = browser.NewPage()
-				if err != nil {
-					log.Fatalf("could not create newPage: %v", err)
-				}
-
-				// Open the url in the new page (this is the PDF)
-				if response, err = newPage.Goto(fmt.Sprintf("%v", html)); err != nil {
-					log.Fatalf("could not go to %v: %v", *url, err)
-				}
-				if response.Status() != 200 {
-					log.Fatalf("could not goto: %v", response.Status())
-				}
-
-				//Python code to get the PDF
-				//pdf = client.send("Page.captureSnapshot")['data']
-				//save_mhtml(path, mhtml)
-				//var cdpsession playwright.CDPSession
-				//cdpsession, err = newPage.Context().NewCDPSession(newPage)
-				//if err != nil {
-				//	log.Fatalf("could not get cdbsession: %v", err)
-				//}
-				//params := make(map[string]interface{})
-				//params["format"] = "mhtml"
-				//var mhtml interface{}
-				//mhtml, err = cdpsession.Send("Page.captureSnapshot", params)
-				//if err != nil {
-				//	log.Fatalf("could not get pdf: %v", err)
-				//}
-				//logger.Debug(fmt.Sprintf("pdf: %#v", mhtml))
-				
-				// TODO: figure out how to save the new page as a PDF
-				NewPages = append(NewPages, newPage)
-
-				// Get image billButton
-				billNewWindowLink := page.Locator("#ViewBills > div.view.extraLarge > div > div.container.sectionsContainer > div.section.content.contentSection.clear > div.area.billimage.clear > div.areaHeader > span.newWindow > a")
-				err = billNewWindowLink.WaitFor(playwright.LocatorWaitForOptions{
-					Timeout: playwright.Float(5000),
-				})
-				if err != nil {
-					log.Printf("could not WaitFor billNewWindowLink: %v", err)
+					logger.Error(fmt.Sprintf("could not get html: %v", err))
 					continue
 				}
-				var innerHTML string
-				innerHTML, err = billNewWindowLink.InnerHTML()
-				if err != nil {
-					log.Printf("could not get innerHTML: %v", err)
-					continue
-				}
-				logger.Debug(fmt.Sprintf("innerHTML: %#v", innerHTML))
-				var billNewWindowLinkCount int
-				billNewWindowLinkCount, err = billNewWindowLink.Count()
-				if err != nil {
-					logger.Error(fmt.Sprintf("could not get image billNewWindowLinkCount: %v", err))
-					continue
-				}
-				// Has an image PDFLink in the window, so click i
-				if billNewWindowLinkCount == 1 {
-					var outerHtml interface{}
-					outerHtml, err = billNewWindowLink.Evaluate("el => el.outerHTML", nil, playwright.LocatorEvaluateOptions{Timeout: playwright.Float(30000)})
-					if err != nil {
-						logger.Error(fmt.Sprintf("could not get image billNewWindowLink outerHTML: %v", err))
-						continue
-					}
-					linkText := fmt.Sprintf("%v", outerHtml)
+				logger.Debug(fmt.Sprintf("Link to document for GET: %v", html))
 
-					// <a href="([^"])+
-					re := regexp.MustCompile(`<a href="([^"]*?)"`)
-					res := re.FindAllStringSubmatch(linkText, 1)
-					log.Printf("linkText href: %#v", res[0][1])
-
-					page.OnDialog(func(dialog playwright.Dialog) {
-						// Get dialog path
-						content, err := dialog.Page().Content()
-						if err != nil {
-							log.Fatalf("could not get dialog path: %v", err)
-						}
-						logger.Debug("dialog content: %#v", content)
-					})
-					// Click the open in new window link ...
-					err = billNewWindowLink.Click()
-					if err != nil {
-						log.Fatalf("could not click billNewWindowLink: %v", err)
-					}
-					var popup playwright.Page
-					popup, err = page.ExpectPopup(func() error {
-						logger.Debug("ExpectPopup")
-						return nil
-					},
-					)
-					if err != nil {
-						log.Fatalf("could not get popup: %v", err)
-					}
-
-					html, err = popup.Content()
-					if err != nil {
-						log.Fatalf("could not get content: %v", err)
-					}
-					logger.Debug(fmt.Sprintf("popup html: %#v", html))
-
-					// Close the popup window (probably wouldn't need this if we get the right URL without clicking the
-					// link to open in a new window)
-					err = popup.Close()
-					if err != nil {
-						log.Fatalf("could not close popup: %v", err)
-					}
-				}
+				// Write the PDF to a file
+				WritePDF(fmt.Sprintf("%v", html), fmt.Sprintf("%v-%v-%v.pdf", payeeName, selectedOptionText, option))
+				pdfCount++
 
 			}
-			// Done with the selects, so close the window
+			// Done with the selections on this popup, so make sure to close it
 			err = CloseBillWindow(PDFPopupCloseButton)
 			if err != nil {
 				logger.Error(fmt.Sprintf("could not click PDFPopupCloseButton: %v", err))
 			}
-			log.Printf("%d NewPages", len(NewPages))
+			log.Printf("%d PDFs for %v", pdfCount, payeeName)
 		}
-		// Close the billNewWindowLink window
-		closeBillWindowButton := page.Locator("body > div:nth-child(11) > div.ui-dialog-titlebar.ui-corner-all.ui-widget-header.ui-helper-clearfix > billButton")
-		var closeBillWindowButtonCount int
-		closeBillWindowButtonCount, err = closeBillWindowButton.Count()
-		if err != nil {
-			log.Fatalf("could not get closeBillWindowButton dropDownItemsCount: %v", err)
-		}
-		err = closeBillWindowButton.WaitFor(playwright.LocatorWaitForOptions{
-			Timeout: playwright.Float(5000),
-		})
-		if err != nil {
-			log.Printf("could not WaitFor closeBillWindowButton: %v", err)
-			continue
-		}
-		if closeBillWindowButtonCount == 1 {
-			closeBillWindowButton.Click()
-			logger.Debug("closeBillWindowButton clicked")
-		}
-
 	} // End of looping through PDFLinks
+}
+
+func MakeFileName(text string) (filename string) {
+	myVal := strings.Split(text, " - ")
+	// Replace slashes with dashes
+	filename = strings.Replace(myVal[0], "/", "-", -1)
+	// Replace spaces with underscores
+	re := regexp.MustCompile(`\s+`)
+	filename = re.ReplaceAllString(filename, "_")
+	return
+
 }
 
 func CloseBillWindow(closeButton playwright.Locator) (err error) {
@@ -650,6 +579,28 @@ func CloseBillWindow(closeButton playwright.Locator) (err error) {
 	}
 	err = closeButton.Click()
 	return
+}
+
+// WritePDF write the PDF to a file from the URL
+func WritePDF(url string, filename string) (err error) {
+
+	// Wrap curl command to save the file
+	// curl -s -b cookies.txt -c cookies.txt -o test.pdf -L "https://login.billscenter.paytrust.com/3004/Reports/ViewBill?billId=1234567890&accountId=1234567890&billType=Bill&billDate=2021-08-01&billAmount=123.45&billStatus=Paid&billDueDate=2021-08-01&billPayDate=2021-08-01&billPayAmount=123.45&billPayStatus=Paid&billPayMethod=Check&billPayConfirmation=1234567890&billPayMemo=1234567890&billPayCheckNumber=1234567890&billPayCheckDate=2021-08-01&billPayCheckAmount=123.45&billPayCheckStatus=Paid&billPayCheckMemo=1234567890&billPayCheckNumber=1234567890&billPayCheckDate=2021-08-01&billPayCheckAmount=123.45&billPayCheckStatus=Paid&billPayCheckMemo=1234567890&billPayCheckNumber=1234567890&billPayCheckDate=2021-08-01&billPayCheckAmount=123.45&billPayCheckStatus=Paid&billPayCheckMemo=1234567890&billPayCheckNumber=1234567890&billPayCheckDate=2021-08-01&billPayCheckAmount=123.45&billPayCheckStatus=Paid&billPayCheckMemo=1234567890&billPayCheckNumber=1234567890&billPayCheckDate=2021-08-01&billPayCheckAmount=123.45&billPayCheckStatus=Paid&billPayCheckMemo=1234567890"
+	// Set up curl command
+	curlString := fmt.Sprintf(`curl --location '%v' --output '%v'`, url, filename)
+	curlCommand := exec.Command("sh", "-c", curlString)
+	// run the command
+	var curlStdout, curlStdErr bytes.Buffer
+	curlCommand.Stdout = &curlStdout
+	curlCommand.Stderr = &curlStdErr
+	err = curlCommand.Run()
+	if err != nil {
+		logger.Error(fmt.Sprintf("could not run curl: %v", err))
+		logger.Error(fmt.Sprintf("curlStdErr: %v", string(curlStdErr.Bytes())))
+		return
+	}
+	return
+
 }
 
 // GetPDF - get the PDF from the URL
