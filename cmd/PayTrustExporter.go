@@ -417,13 +417,29 @@ PDFLinks:
 			log.Fatalf("could not get payeeName: %v", err)
 		}
 		payeeName = MakeFileName(strings.Split(payeeName, "<")[0])
-		log.Printf("payeeName: %#v", payeeName)
 		for _, name := range payeeNames {
 			if name == payeeName {
 				continue PDFLinks
 			}
 		}
+		skipThese := []string{
+			"Paytrust_Bill_Center",
+			"Dominion_Energy",
+			"Rocky_Mountain_Power",
+			"Salt_Lake_City_Corpo",
+			"T-Mobile",
+			"American_Express_(De",
+			"American_Express (Go",
+			"Comcast",
+		}
+		for _, name := range skipThese {
+			if payeeName == name {
+				// Probably should do something here to make "receipts" for these
+				continue PDFLinks
+			}
+		}
 		payeeNames = append(payeeNames, payeeName)
+		logger.Debug(fmt.Sprintf("payeeName: %#v", payeeName))
 
 		// Open the window ...
 		err = PDFLink.Click(playwright.LocatorClickOptions{
@@ -457,6 +473,24 @@ PDFLinks:
 			log.Fatalf("could not WaitFor PDFPopupCloseButton: %v", err)
 		}
 
+		// #ViewBills_MessageSummary > ul > li
+		errorLocator := page.Locator("#ViewBills_MessageSummary > ul > li")
+		err = errorLocator.WaitFor(playwright.LocatorWaitForOptions{
+			State:   playwright.WaitForSelectorStateVisible,
+			Timeout: playwright.Float(10000),
+		})
+		if err == nil {
+			CloseBillWindow(PDFPopupCloseButton)
+			var errorText string
+			// Get the error message
+			errorText, err = errorLocator.TextContent()
+			if err != nil {
+				logger.Error(fmt.Sprintf("could not get errorText: %v", err))
+				continue PDFLinks // Try the next bill link
+			}
+			logger.Error(fmt.Sprintf("errorText: %v", errorText))
+			continue PDFLinks // Try the next bill link
+		}
 		// Get the selector for the iframe
 		// #ViewBills > div.view.extraLarge > div > div.container.sectionsContainer > div.section.content.contentSection.clear > div.area.billselection.clear > div > div.field.billSelection.clear > select
 		billSelector := page.Locator("#ViewBills > div.view.extraLarge > div > div.container.sectionsContainer > div.section.content.contentSection.clear > div.area.billselection.clear > div > div.field.billSelection.clear > select")
@@ -496,7 +530,14 @@ PDFLinks:
 				// Select the current option
 				selected, err = billSelector.SelectOption(playwright.SelectOptionValues{Values: &[]string{option}})
 				if err != nil {
-					log.Fatalf("%d could not select option: %v", optno, err)
+					logger.Error(fmt.Sprintf("%d could not select option: %v", optno, err))
+					CloseBillWindow(PDFPopupCloseButton)
+					continue PDFLinks // Try the next bill link
+				}
+				if len(selected) == 0 {
+					logger.Error(fmt.Sprintf("%d could not select option: %v", optno, err))
+					CloseBillWindow(PDFPopupCloseButton)
+					continue PDFLinks // Try the next bill link
 				}
 				err = page.WaitForLoadState(playwright.PageWaitForLoadStateOptions{
 					State:   playwright.LoadStateNetworkidle,
@@ -506,7 +547,7 @@ PDFLinks:
 					logger.Error(fmt.Sprintf("%d could not WaitFor option %d (%v): %v", optno, option, err))
 					continue
 				}
-				logger.Debug(fmt.Sprintf("Processing selectedOption: %#v", selected))
+				logger.Debug(fmt.Sprintf("%d Processing selectedOption: %#v", optno, option))
 
 				// Get the selected option
 				selectedOption := optionsLocators[optno]
@@ -524,23 +565,28 @@ PDFLinks:
 				})
 				if err != nil {
 					logger.Error(fmt.Sprintf("could not WaitFor frameMe: %v", err))
-					break // Assume we are done with this payee
+					CloseBillWindow(PDFPopupCloseButton)
+					continue PDFLinks // Try the next bill link
 				}
 				var frameMeCount int
 				frameMeCount, err = frameMe.Count()
 				if err != nil {
 					logger.Error(fmt.Sprintf("could not WaitFor frameMe: %v", err))
-					break // Try the next one
+					CloseBillWindow(PDFPopupCloseButton)
+					continue PDFLinks // Try the next bill link
 				}
 
 				if frameMeCount == 0 {
-					continue
+					logger.Error(fmt.Sprintf("could not find frameMe"))
+					CloseBillWindow(PDFPopupCloseButton)
+					continue PDFLinks // Try the next bill link
 				}
 				logger.Debug(fmt.Sprintf("frameMeCount: %#v", frameMeCount))
 				html, err = frameMe.GetAttribute("src")
 				if err != nil {
 					logger.Error(fmt.Sprintf("could not get html: %v", err))
-					continue
+					CloseBillWindow(PDFPopupCloseButton)
+					continue PDFLinks // Try the next bill link
 				}
 				logger.Debug(fmt.Sprintf("Link to document for GET: %v", html))
 
@@ -549,12 +595,12 @@ PDFLinks:
 				pdfCount++
 
 			}
+			log.Printf("%d PDFs for %v", pdfCount, payeeName)
 			// Done with the selections on this popup, so make sure to close it
 			err = CloseBillWindow(PDFPopupCloseButton)
 			if err != nil {
 				logger.Error(fmt.Sprintf("could not click PDFPopupCloseButton: %v", err))
 			}
-			log.Printf("%d PDFs for %v", pdfCount, payeeName)
 		}
 	} // End of looping through PDFLinks
 }
