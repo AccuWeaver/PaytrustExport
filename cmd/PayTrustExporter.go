@@ -399,7 +399,7 @@ PDFLinks:
 		if err != nil {
 			log.Fatalf("could not get html: %v", err)
 		}
-		logger.Debug(fmt.Sprintf("PDFLink html: %#v", html))
+		//logger.Debug(fmt.Sprintf("PDFLink html: %#v", html))
 
 		// document.querySelector("tr > td.column.bill > button.billIcon").parentElement.parentElement.querySelector("td.payeename").innerHTML
 		// Get the payeeName name by going up two levels and then finding the payeename cell
