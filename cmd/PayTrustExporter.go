@@ -28,16 +28,20 @@ func main() {
 
 	// Arguments for 1Password vault and tags to use to get password
 	vault := flag.String("vault", "Personal", "1Password vault")
+	// Tag is what we use to find our password for Paytrust
 	tags := flag.String("tags", "Paytrust", "1Password tags")
 
 	// Password to use if not using 1Password
-	password := flag.String("1password_pass", "", "Password to use if not using 1Password")
+	password := flag.String("password", "", "Password to use if not using 1Password")
+
+	// Paytrust login username argument
+	username := flag.String("username", "", "Paytrust login username")
 
 	// Paytrust login URL argument
 	url := flag.String("url", "https://login.billscenter.paytrust.com/3004/", "Paytrust login URL")
 
-	// Paytrust login username argument
-	username := flag.String("username", "", "Paytrust login username")
+	// Report name for Paytrust to get all the bills
+	reportName := flag.String("reportName", "Include All Dates", "Report name for Paytrust to get all the bills")
 
 	// Debug flag
 	debug := flag.Bool("debug", false, "Debug flag")
@@ -62,7 +66,13 @@ func main() {
 		vaultUserName, vaultPassword := GetPasswordFromVault(vault, tags)
 		username = &vaultUserName
 		password = &vaultPassword
+	}
 
+	// Die if we didn't find the username and password ....
+	if *username == "" || *password == "" {
+		fmt.Printf("Username and password are required\n")
+		flag.Usage()
+		os.Exit(1)
 	}
 
 	// Set up our run options
@@ -305,7 +315,7 @@ func main() {
 
 	var foundReport bool
 	// All dates value
-	allDates := "Include All Dates"
+	allDates := *reportName
 	var text string
 	for _, item := range reportSelectItems {
 		text, err = item.TextContent()
@@ -313,7 +323,7 @@ func main() {
 			log.Fatalf("could not get text: %v", err)
 		}
 		if strings.Contains(text, allDates) {
-			logger.Debug("Found All Dates")
+			logger.Debug(fmt.Sprintf("Found %v", *reportName))
 			foundReport = true
 			reportTitleSelector := "#Reports_ViewReportViewDiv > div.container.sectionsContainer > div.section.content.contentSection.clear > div.report-title > h1"
 			reportTitle := page.Locator(reportTitleSelector)
@@ -328,7 +338,7 @@ func main() {
 
 			err = item.Click()
 			if err != nil {
-				log.Fatalf("could not click All Dates: %v", err)
+				log.Fatalf("could not click %v: %v", *reportName, err)
 			}
 
 			reportTitleSelector = fmt.Sprintf(reportTitleSelector)
@@ -337,9 +347,9 @@ func main() {
 				Timeout: playwright.Float(10000),
 			})
 			if err != nil {
-				log.Fatalf("Report took too long to load after clicking All Dates: %v", err)
+				log.Fatalf("Report took too long to load after clicking %v: %v", *reportName, err)
 			}
-			logger.Debug("All Dates clicked and title ready")
+			logger.Debug(fmt.Sprintf("%v clicked and title ready", *reportName))
 			break
 		}
 	}
@@ -671,6 +681,9 @@ func GetPDF(html string) (PDFbody []byte, err error) {
 
 }
 
+// GetPasswordFromVault - get the password from 1Password this assumes that there is just one entry that matches the
+//
+//	vault and tag for the entry
 func GetPasswordFromVault(vault *string, tags *string) (vaultUserName string, vaultPassword string) {
 	vaultEntries := onepassword.GetVaultEntries(*vault, *tags)
 	log.Printf("vaultEntries: %d", len(vaultEntries))
